@@ -214,6 +214,8 @@ class DjangoMutationCUD(DjangoMutationBase):
         new_field = super().__copy__()
         new_field.input_type = self.input_type
         new_field.full_clean = self.full_clean
+        new_field.key_attr = self.key_attr
+        new_field.argument_name = self.argument_name
         return new_field
 
     @property
