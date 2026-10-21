@@ -434,7 +434,7 @@ def _process_type(
 @dataclasses.dataclass
 class StrawberryDjangoDefinition(Generic[_O, _M]):
     origin: _O
-    model: type[_M]
+    model: builtins.type[_M]
     store: OptimizerStore
     is_input: bool = False
     is_partial: bool = False
