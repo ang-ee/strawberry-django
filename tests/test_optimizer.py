@@ -18,8 +18,10 @@ from django.utils import timezone
 from pytest_mock import MockerFixture
 from strawberry.relay import GlobalID, to_base64
 from strawberry.types import ExecutionResult, Info, get_object_definition
+from strawberry.types.object_type import StrawberryObjectDefinition
 
 import strawberry_django
+from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import (
     DjangoOptimizerExtension,
     OptimizerConfig,
@@ -3734,3 +3736,69 @@ def test_method_resolver_without_relation_hint_does_not_descend(db):
     sqls = [q["sql"] for q in ctx.captured_queries]
     assert sqls, sqls
     assert "projects_milestone" not in sqls[0], sqls[0]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("count", [1, 6])
+def test_nested_optimizer_uses_schema_type_definition(count):
+    """Nested fields must use the same schema-local hints as root fields."""
+    from dataclasses import replace
+    from functools import lru_cache
+
+    from django.db.models.functions import Upper
+
+    @strawberry_django.type(Project)
+    class SchemaProject:
+        name: strawberry.auto
+        name_upper: str
+
+    @strawberry_django.type(Project)
+    class ProjectHints:
+        name_upper: str = strawberry_django.field(annotate=Upper("name"))
+
+    @strawberry_django.type(Milestone)
+    class SchemaMilestone:
+        project: SchemaProject
+
+    @strawberry.type
+    class Query:
+        projects: list[SchemaProject] = strawberry_django.field()
+        milestones: list[SchemaMilestone] = strawberry_django.field()
+
+    class SchemaWithHints(strawberry.Schema):
+        @lru_cache  # noqa: B019 - Match the native Schema method contract.
+        def get_type_by_name(self, name):
+            definition = super().get_type_by_name(name)
+            if name == "SchemaProject":
+                assert isinstance(definition, StrawberryObjectDefinition)
+                hints = get_object_definition(ProjectHints, strict=True)
+                hint = hints.get_field("name_upper")
+                assert hint is not None
+                return replace(
+                    definition,
+                    fields=[
+                        hint if field.python_name == "name_upper" else field
+                        for field in definition.fields
+                    ],
+                )
+            return definition
+
+    schema = SchemaWithHints(query=Query, extensions=[DjangoOptimizerExtension])
+    for _ in range(count):
+        MilestoneFactory.create(project=ProjectFactory.create(name="project"))
+
+    with assert_num_queries(1):
+        root = schema.execute_sync("{ projects { nameUpper } }")
+    assert root.errors is None
+    assert root.data == {"projects": [{"nameUpper": "PROJECT"}] * count}
+
+    with assert_num_queries(2):
+        nested = schema.execute_sync("{ milestones { project { nameUpper } } }")
+    assert nested.errors is None
+    assert nested.data == {
+        "milestones": [{"project": {"nameUpper": "PROJECT"}}] * count,
+    }
+    definition = get_object_definition(SchemaProject, strict=True)
+    field = definition.get_field("name_upper")
+    assert isinstance(field, StrawberryDjangoField)
+    assert not field.store

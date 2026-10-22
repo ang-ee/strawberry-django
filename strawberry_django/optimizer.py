@@ -1247,6 +1247,13 @@ def _get_model_hints(
     level: int = 0,
     subclass_collection: set[type[models.Model]] | None = None,
 ) -> OptimizerStore | None:
+    # Relations carry declaration definitions, while a schema may expose a
+    # schema-local definition with different field hints (for example extensions).
+    # Resolve through the active schema just as optimize() does for root fields.
+    schema_definition = schema.get_type_by_name(object_definition.name)
+    if isinstance(schema_definition, StrawberryObjectDefinition):
+        object_definition = schema_definition
+
     cache = cache or {}
 
     # In case this is a relay field, the selected fields are inside edges -> node selection
